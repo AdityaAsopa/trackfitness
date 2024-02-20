@@ -104,7 +104,7 @@ def hr_to_sdnn(hr_bpm):
     return rr_to_sdnn(60000/hr_bpm)
 
 
-def HRrecovery(df, fit_window=30, xmin=0, plot=True, fig='', axx=''):
+def HRrecovery(df, fit_window=60, xmin=0, plot=True, fig='', axx=''):
     # get the time it take to reach the maximum HR: 10-90% of the maximum HR
     # first get the baseline corrected HR
     hrbaseline = df[df['epoch']=='pre']['HR'].median()
@@ -112,6 +112,8 @@ def HRrecovery(df, fit_window=30, xmin=0, plot=True, fig='', axx=''):
 
     # what is the last 'Timestamp' value when HR was 10% of maxHR before the maximum HR
     maxHR = df[ (df['epoch']=='orthostatic') ][ 'HR_baseline_corrected' ].max()
+    ssHR = df[ (df['epoch']=='post') ][ 'HR_baseline_corrected' ].median()
+    endOrthoHR = df[ (df['epoch']=='orthostatic') ][ 'HR_baseline_corrected' ].values[-1]
     time_max = df[(df['HR_baseline_corrected']==maxHR)]['Timestamp'].values[0]
 
     # get 'Timestamp' value of all those rows where HR is 10% of maxHR
@@ -124,17 +126,17 @@ def HRrecovery(df, fit_window=30, xmin=0, plot=True, fig='', axx=''):
 
     # # for the fall phase we will fit an exponential to the falling HR
     # # first we will get the HR values for the fall phase
-    dfslice2 = dfslice[ (dfslice['Timestamp']< time_max+fit_window) ]
+    dfslice2 = dfslice[ (dfslice['Timestamp'] < time_max+fit_window) ]
     time = dfslice2['Timestamp'].values - time_max
     hr = dfslice2['HR_baseline_corrected'].values
 
-    import matplotlib.pyplot as plt
+    def fixed_exponential(t, a, tau, ss):
+        return a * np.exp(-1 * t/tau) + ss
 
-    def fixed_exponential(t, tau, ss):
-        return maxHR * np.exp(-1 * t/tau) + ss
-
-    popt, _ = curve_fit(fixed_exponential, time, hr, p0=(15, 5))
-    tau, ss = popt
+    print('maxHR:', maxHR, 'endOrthoHR:', endOrthoHR, 'ssHR:', ssHR)
+    popt, _ = curve_fit(fixed_exponential, time, hr, p0=(maxHR, 15, endOrthoHR), bounds=([0.99*(maxHR-endOrthoHR),5,0], [1.2*maxHR, 30, endOrthoHR]))
+    # popt, _ = curve_fit(fixed_exponential, time, hr, p0=(maxHR, 15, endOrthoHR), bounds=([0.9*(maxHR-endOrthoHR),5,0], [1.1*(maxHR+endOrthoHR), 30, endOrthoHR]))
+    a, tau, ss = popt
     # # plot the fit
     HRR60 = np.round(maxHR - fixed_exponential(60, *popt))
     print(f'delta HR by the end of 60s: {HRR60}')
@@ -147,9 +149,12 @@ def HRrecovery(df, fit_window=30, xmin=0, plot=True, fig='', axx=''):
     
     # ax.plot(dfslice['Timestamp'], dfslice['HR_baseline_corrected']) #--time_max+xmin
     axx.plot([time_10_pre, time_90_pre], hrbaseline+[maxHR*0.1, maxHR*0.9], '-o', color='orange',  label=f'HR Rise: {rise_slope:.1f} bpm/s')
-    axx.plot(T+xmin, hrbaseline+fixed_exponential(T, tau, ss), '-g', label=f'60s HR Recovery: {HRR60} bpm')
+    axx.plot(T+xmin, hrbaseline+fixed_exponential(T, a, tau, ss), '-g', label=f'60s HR Recovery: {HRR60} bpm')
+
+    ff,aa = plt.subplots()
+    aa.plot(T+xmin, fixed_exponential(T, a, tau, ss), '-g', label=f'60s HR Recovery: {HRR60} bpm')
     
-    return rise_slope, tau, ss, maxHR, HRR60, fig, axx
+    return rise_slope, tau, ss, a, HRR60, fig, axx
 
 
 
@@ -269,7 +274,7 @@ def parse_workout_file(filepath, origin='Polar Sensor Logger Export'):
     origin = origins[1]
     '''
     if origin == 'Polar Sensor Logger Export':
-        df = pd.read_csv(filepath, sep=';', index_col=0)
+        df = pd.read_csv(filepath, sep=';', )
         df.rename(columns={'Phone timestamp': 'Timestamp'}, inplace=True)
         df.rename(columns={'RR-interval [ms]': 'RR'}, inplace=True)
         df['HR'] = 60000 / df['RR']
@@ -302,7 +307,7 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     """
     df = parse_workout_file(filepath, origin=origin)
     global folder
-    folder = filepath.parent
+    folder = Path(filepath).parent
 
     # assert that the dataframe has correct columns: 'Timestamp', 'RR', 'HR'
     assert 'Timestamp' in df.columns, "Timestamp column not found"
@@ -389,17 +394,20 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     }
 
     if plot:
-        rise_slope, tau, ss, maxHR, HRR60, fig, ax = plothr(df)
+        rise_slope, tau, ss, maxHR, HRR60, fig, ax = plothr(df, pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot_window_size=60,)
     else:
         print('No plot requested')
         rise_slope, tau, ss, maxHR, HRR60, fig, ax = HRrecovery(df, plot=False)
 
+    # check breathing rate during pre period by doing a freq analysis
+    
+
     # add the HR recovery parameters to the params dict
-    params['Ortho HR Rise Slope'] = rise_slope
-    params['Ortho HR Fall Tau'] = tau
-    params['Ortho HR Fall HRinf'] = ss
-    params['maxHR'] = maxHR
-    params['HR Recovery 60s'] = HRR60
+    params['Ortho HR Rise Slope'] = np.round(rise_slope,2)
+    params['Ortho HR Fall Tau'] = np.round(tau,2)
+    params['Ortho HR Fall HRinf'] = np.round(ss,2)
+    params['maxHR'] = np.round(maxHR,2)
+    params['HR Recovery 60s'] = np.round(HRR60,2)
 
     print('Saving Record...')
     save_record(record_datetime, params)
@@ -414,7 +422,7 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
 if __name__ == "__main__":
     print('Running Orthostatic HRV Test...')
     filepath = sys.argv[1]
-    pre_baseline_period = sys.argv[2]
-    post_baseline_period = sys.argv[3]
+    pre_baseline_period = int(sys.argv[2])
+    post_baseline_period = int(sys.argv[3])
     
     main(filepath, origin='Polar Sensor Logger Export', pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True) 
