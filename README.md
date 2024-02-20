@@ -66,9 +66,15 @@ post_baseline_period = 120 # seconds
 df, params, [fig, ax] = odht.main(filepath, origin, pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True) #, plot=True)
 ```
 
-### Results
+## Results
 The results are displayed in the form of a plot. The plot shows the HRV and Orthostatic Load over the period of time. The HRV is measured in milliseconds and the Orthostatic Load is measured in beats per minute.
 
+### Orthostatic HRV Test
 ![Orthostatic HRV Test](orthostatic_hrv_test_2024-02-13-04-09-55.png)
 
+### Orthostatic Load and other parameters
 ![Results](df_params.png)
+
+### Breathing Quality
+
+![Breathing Quality](HR_response_to_breathing_2024-02-20-09-17-11.png)

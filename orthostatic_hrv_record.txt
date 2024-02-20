@@ -1,2 +1,2 @@
-Timestamp,Pre HRV (RMSSD),Post HRV (RMSSD),Pre HRV (SDNN),Post HRV (SDNN),max HR,Pre max HR,Pre median HR,Ortho max HR,Post max HR,Post median HR,Flag,HRV Pre-Post KS-Stat,HRV Pre-Post KS-pval,Ortho HR Rise Slope,Ortho HR Fall Tau,Ortho HR Fall HRinf,maxHR,HR Recovery 60s
-2024-02-13-04-09-55,0.0,0.0,35.8,24.3,98,64,59.0,98,69,65.0,,1.0,0.0,1.642105263157895,6.677854263870615,6.8522749071776055,39.0,32.0
+Timestamp,Pre HRV (RMSSD),Post HRV (RMSSD),Pre HRV (SDNN),Post HRV (SDNN),max HR,Pre max HR,Pre median HR,Ortho max HR,Post max HR,Post median HR,Flag,HRV Pre-Post KS-Stat,HRV Pre-Post KS-pval,Ortho HR Rise Slope,Ortho HR Fall Tau,Ortho HR Fall HRinf,maxHR,HR Recovery 60s,Breathing Rate,Breathing Cycle Time,Breathing Cycle Fluctuation
+2024-02-20-09-17-11,23.0,6.0,59.3,22.6,98.0,75.0,64.0,98.0,88.0,83.0,,1.0,0.0,1.93,5.0,15.93,18.12,18.0,5.97,10.04,1.61

@@ -12,9 +12,8 @@ import matplotlib.pyplot as plt
 # import kruskal and KS test from scipy
 from scipy.stats import kruskal, ks_2samp
 from scipy.optimize import curve_fit
-import numpy as np
-from scipy.optimize import curve_fit
-from pathlib import Path
+from scipy.signal import find_peaks
+from scipy.interpolate import interp1d
 import fitparse
 # import seaborn as sns
 
@@ -53,7 +52,6 @@ def tcx_to_df(filepath):
                 
             data.append(r)
     return pd.DataFrame(data)
-
 
 def rr_to_rmssd(rr_intervals_ms):
     """
@@ -103,7 +101,6 @@ def hr_to_sdnn(hr_bpm):
     """
     return rr_to_sdnn(60000/hr_bpm)
 
-
 def HRrecovery(df, fit_window=60, xmin=0, plot=True, fig='', axx=''):
     # get the time it take to reach the maximum HR: 10-90% of the maximum HR
     # first get the baseline corrected HR
@@ -150,12 +147,8 @@ def HRrecovery(df, fit_window=60, xmin=0, plot=True, fig='', axx=''):
     # ax.plot(dfslice['Timestamp'], dfslice['HR_baseline_corrected']) #--time_max+xmin
     axx.plot([time_10_pre, time_90_pre], hrbaseline+[maxHR*0.1, maxHR*0.9], '-o', color='orange',  label=f'HR Rise: {rise_slope:.1f} bpm/s')
     axx.plot(T+xmin, hrbaseline+fixed_exponential(T, a, tau, ss), '-g', label=f'60s HR Recovery: {HRR60} bpm')
-
-    ff,aa = plt.subplots()
-    aa.plot(T+xmin, fixed_exponential(T, a, tau, ss), '-g', label=f'60s HR Recovery: {HRR60} bpm')
     
     return rise_slope, tau, ss, a, HRR60, fig, axx
-
 
 
 def save_record(record_datetime, params, record_filepath="orthostatic_hrv_record.txt" ):
@@ -268,6 +261,7 @@ def plothr(df, pre_baseline_period=60, post_baseline_period=60, plot_window_size
 
     return rise_slope, tau, ss, maxHR, HRR60, fig, ax
 
+
 def parse_workout_file(filepath, origin='Polar Sensor Logger Export'):
     ''' 
     origins = ['Polar Sensor Logger Export', 'Runalyze Fit Export' , 'Runalyze TCX Export']
@@ -293,6 +287,124 @@ def parse_workout_file(filepath, origin='Polar Sensor Logger Export'):
     df.head(10)
 
     return df
+
+
+def interpolate_cycle(cycle):
+    # Create a function that interpolates the cycle
+    f = interp1d(np.linspace(0, 1, len(cycle)), cycle, kind='linear')
+
+    # Use the function to interpolate the cycle to 15 data points
+    return f(np.linspace(0, 1, 15))
+
+
+def breathanlyse(df):
+    numsamples = df.shape[0]
+    Fs = numsamples / df['Timestamp'].values[-1]
+
+    # spectral analysis of 'pre' period 'HR'
+    # find outa what frequencies of HR are seen in the data by doing a fourier or spectral anaylsis
+    hr = df[df['epoch']=='pre']['HR'].values
+    t = df[df['epoch']=='pre']['Timestamp'].values
+
+    # one figure, with 2 subplots one cartesian and one polar
+    fig = plt.figure(figsize=(12, 6))
+    ax1 = plt.subplot(121, )
+    # make the ax2 polar projection
+    ax2 = plt.subplot(122, polar=True)
+
+    locs, _ = find_peaks(hr, prominence=3)
+    resp = 60 / np.mean(np.diff(t[locs])) # per min
+    cycle_time = np.mean(np.diff(t[locs])) # in seconds
+    cycle_time_std = np.std(np.diff(t[locs])) # in seconds
+
+
+    resp_cycles = []
+    for i, tt in enumerate(locs[:-1]):
+        hrslice = hr[tt: locs[i+1]]
+        resp_cycles.append(hrslice)
+        
+    for i, cycle in enumerate(resp_cycles):
+        # Create a list of angles based on the number of measurements in the cycle
+        angles = np.linspace(0, 2 * np.pi, len(cycle)) 
+        ax1.plot(angles, cycle, color=np.array([72,34,115])/255, linewidth=1, alpha=0.5)
+
+    # also plot an average respiratory cycle - HR response
+    # Apply the function to each cycle in your data
+    interpolated_data = np.array([interpolate_cycle(cycle) for cycle in resp_cycles])
+    # Calculate the average heart rate for each interpolated angle
+    avg_hr = np.mean(interpolated_data, axis=0)
+    angles = np.linspace(0, 2 * np.pi, 15) 
+    ax1.plot(angles, avg_hr, color='k', linewidth=3)
+    # Show the plots
+    lower_limit, upper_limit = 40, 80
+    ax1.set_ylim([lower_limit, upper_limit])
+    # Shade the inhalation phase
+    [start_inhalation, end_inhalation] = 0, np.pi
+    [start_exhalation, end_exhalation] = np.pi, 2*np.pi
+
+    # # Replace start_inhalation and end_inhalation with the start and end angles of the inhalation phase
+    ax1.fill_between(np.linspace(0,np.pi,180), np.linspace(40,40,180), np.linspace(80,80,180), color=np.array([37,134,142])/255, alpha=0.5)
+    # # Shade the exhalation phase
+    ax1.fill_between(np.linspace(np.pi,2*np.pi,180), np.linspace(40,40,180), np.linspace(80,80,180), color=np.array([164,49,127])/255, alpha=0.5)
+
+
+    # make grid white
+    ax1.yaxis.grid(color='white')
+    ax1.xaxis.grid(color='white')
+    # change the tick labels
+    ax1.set_xticks(np.linspace(0, 2*np.pi, 4, endpoint=False), labels=['Start Inhale', '','Start Exhale',''])
+    ax1.set_yticks(np.linspace(40, 80, 5), labels=['40', '50', '60', '70', '80'])
+    ax1.set_xlim([0, 2*np.pi])
+    # remove spines
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+
+
+
+    # make ax2 polar
+    # ax2.set_projection('polar')
+    ax2.set_theta_zero_location("N")
+    # Assuming `data` is your list of vectors, where each vector is heart rate during one breathing cycle
+
+    for i, cycle in enumerate(resp_cycles):
+        # Create a list of angles based on the number of measurements in the cycle
+        angles = np.linspace(0, 2 * np.pi, len(cycle)) 
+        ax2.plot(angles, cycle, color=np.array([72,34,115])/255, linewidth=1, alpha=0.5)
+
+    # also plot an average respiratory cycle - HR response
+    # Apply the function to each cycle in your data
+    interpolated_data = np.array([interpolate_cycle(cycle) for cycle in resp_cycles])
+    # Calculate the average heart rate for each interpolated angle
+    avg_hr = np.mean(interpolated_data, axis=0)
+    angles = np.linspace(0, 2 * np.pi, 15) 
+    ax2.plot(angles, avg_hr, color='k', linewidth=3)
+    # Show the plots
+    lower_limit, upper_limit = 40, 80
+    ax2.set_ylim([lower_limit, upper_limit])
+    # Shade the inhalation phase
+    [start_inhalation, end_inhalation] = 0, np.pi
+    [start_exhalation, end_exhalation] = np.pi, 2*np.pi
+
+    # # Replace start_inhalation and end_inhalation with the start and end angles of the inhalation phase
+    ax2.fill_between(np.linspace(0,np.pi,180), np.linspace(40,40,180), np.linspace(80,80,180), color=np.array([37,134,142])/255, alpha=0.5)
+    # # Shade the exhalation phase
+    ax2.fill_between(np.linspace(np.pi,2*np.pi,180), np.linspace(40,40,180), np.linspace(80,80,180), color=np.array([164,49,127])/255, alpha=0.5)
+    # remove outer circle
+    ax2.spines['polar'].set_visible(False)
+    # make grid white
+    ax2.yaxis.grid(color='white')
+    ax2.xaxis.grid(color='white')
+    # change the tick labels
+    ax2.set_xticks(np.linspace(0, 2*np.pi, 4, endpoint=False), labels=['Start Inhale', '','Start Exhale',''])
+    ax2.set_yticks(np.linspace(40, 80, 5), labels=['40', '50', '60', '70', '80'])
+    # change the location of ytick labels
+
+    # save figure
+    fig_filepath = folder / str(f'HR_response_to_breathing_{record_datetime}.png')
+    print(fig_filepath)
+    fig.savefig(fig_filepath)
+
+    return resp, cycle_time, cycle_time_std
 
 
 def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot=True):
@@ -400,7 +512,8 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
         rise_slope, tau, ss, maxHR, HRR60, fig, ax = HRrecovery(df, plot=False)
 
     # check breathing rate during pre period by doing a freq analysis
-    
+    resp, cycle_time, cycle_time_std = breathanlyse(df)
+
 
     # add the HR recovery parameters to the params dict
     params['Ortho HR Rise Slope'] = np.round(rise_slope,2)
@@ -408,6 +521,10 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     params['Ortho HR Fall HRinf'] = np.round(ss,2)
     params['maxHR'] = np.round(maxHR,2)
     params['HR Recovery 60s'] = np.round(HRR60,2)
+    params['Breathing Rate'] = np.round(resp,2)
+    params['Breathing Cycle Time'] = np.round(cycle_time,2)
+    params['Breathing Cycle Fluctuation'] = np.round(cycle_time_std,2)
+
 
     print('Saving Record...')
     save_record(record_datetime, params)
@@ -415,6 +532,7 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     # Print all the params
     for key, value in params.items():
         print(f'{key}: {value}')
+
 
     return df, params, [fig, ax]
 
