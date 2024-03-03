@@ -251,8 +251,6 @@ def plothr(df, pre_baseline_period=60, post_baseline_period=60, plot_window_size
 
     rise_slope, tau, ss, maxHR, HRR60, fig, ax["C"] = HRrecovery(df, xmin=maxOHR_time, fig=fig, axx=ax["C"])
     ax["C"].legend()
-
-    plt.show()
     
     print(record_datetime)
     fig_filepath = folder / str(f'orthostatic_hrv_test_{record_datetime}.png')
@@ -312,15 +310,30 @@ def breathanlyse(df):
     # make the ax2 polar projection
     ax2 = plt.subplot(122, polar=True)
 
-    locs, _ = find_peaks(hr, prominence=3)
-    resp = 60 / np.mean(np.diff(t[locs])) # per min
-    cycle_time = np.mean(np.diff(t[locs])) # in seconds
-    cycle_time_std = np.std(np.diff(t[locs])) # in seconds
+    maxima, _ = find_peaks(hr, prominence=3)
+    minima, _ = find_peaks(-hr, prominence=3)
+    # the time from the peak to trough is inhalation and from trough to peak is exhalation
+    # get an array of both the times
+    if maxima[0] < minima[0]:
+        inhalation_times = [np.round((mint-maxt),2) for maxt, mint in zip(t[maxima], t[minima])]
+        exhalation_times = [np.round((maxt-mint),2) for maxt, mint in zip(t[maxima[1:]], t[minima])]
+    else:
+        inhalation_times = [np.round((mint-maxt),2) for maxt, mint in zip(t[maxima], t[minima[1:]])]
+        exhalation_times = [np.round((maxt-mint),2) for maxt, mint in zip(t[maxima], t[minima])]
+
+    mean_inhalation_time = np.mean(inhalation_times)
+    mean_exhalation_time = np.mean(exhalation_times)
+    inhalation_fraction = np.round(mean_inhalation_time/ (mean_inhalation_time + mean_exhalation_time), 2)
+        
+
+    resp = 60 / np.mean(np.diff(t[maxima])) # per min
+    cycle_time = np.mean(np.diff(t[maxima])) # in seconds
+    cycle_time_std = np.std(np.diff(t[maxima])) # in seconds
 
 
     resp_cycles = []
-    for i, tt in enumerate(locs[:-1]):
-        hrslice = hr[tt: locs[i+1]]
+    for i, tt in enumerate(maxima[:-1]):
+        hrslice = hr[tt: maxima[i+1]]
         resp_cycles.append(hrslice)
         
     for i, cycle in enumerate(resp_cycles):
@@ -336,16 +349,16 @@ def breathanlyse(df):
     angles = np.linspace(0, 2 * np.pi, 15) 
     ax1.plot(angles, avg_hr, color='k', linewidth=3)
     # Show the plots
-    lower_limit, upper_limit = 40, 80
+    lower_limit, upper_limit = 40,80 # 60, 120
     ax1.set_ylim([lower_limit, upper_limit])
     # Shade the inhalation phase
     [start_inhalation, end_inhalation] = 0, np.pi
     [start_exhalation, end_exhalation] = np.pi, 2*np.pi
 
     # # Replace start_inhalation and end_inhalation with the start and end angles of the inhalation phase
-    ax1.fill_between(np.linspace(0,np.pi,180), np.linspace(40,40,180), np.linspace(80,80,180), color=np.array([37,134,142])/255, alpha=0.5)
+    ax1.fill_between(np.linspace(0,np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([37,134,142])/255, alpha=0.5)
     # # Shade the exhalation phase
-    ax1.fill_between(np.linspace(np.pi,2*np.pi,180), np.linspace(40,40,180), np.linspace(80,80,180), color=np.array([164,49,127])/255, alpha=0.5)
+    ax1.fill_between(np.linspace(np.pi,2*np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([164,49,127])/255, alpha=0.5)
 
 
     # make grid white
@@ -353,7 +366,7 @@ def breathanlyse(df):
     ax1.xaxis.grid(color='white')
     # change the tick labels
     ax1.set_xticks(np.linspace(0, 2*np.pi, 4, endpoint=False), labels=['Start Inhale', '','Start Exhale',''])
-    ax1.set_yticks(np.linspace(40, 80, 5), labels=['40', '50', '60', '70', '80'])
+    ax1.set_yticks(np.linspace(lower_limit, upper_limit, 5), labels=np.linspace(lower_limit, upper_limit, 5, dtype=int))
     ax1.set_xlim([0, 2*np.pi])
     # remove spines
     ax1.spines['top'].set_visible(False)
@@ -379,16 +392,15 @@ def breathanlyse(df):
     angles = np.linspace(0, 2 * np.pi, 15) 
     ax2.plot(angles, avg_hr, color='k', linewidth=3)
     # Show the plots
-    lower_limit, upper_limit = 40, 80
     ax2.set_ylim([lower_limit, upper_limit])
     # Shade the inhalation phase
     [start_inhalation, end_inhalation] = 0, np.pi
     [start_exhalation, end_exhalation] = np.pi, 2*np.pi
 
     # # Replace start_inhalation and end_inhalation with the start and end angles of the inhalation phase
-    ax2.fill_between(np.linspace(0,np.pi,180), np.linspace(40,40,180), np.linspace(80,80,180), color=np.array([37,134,142])/255, alpha=0.5)
+    ax2.fill_between(np.linspace(0,np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([37,134,142])/255, alpha=0.5)
     # # Shade the exhalation phase
-    ax2.fill_between(np.linspace(np.pi,2*np.pi,180), np.linspace(40,40,180), np.linspace(80,80,180), color=np.array([164,49,127])/255, alpha=0.5)
+    ax2.fill_between(np.linspace(np.pi,2*np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([164,49,127])/255, alpha=0.5)
     # remove outer circle
     ax2.spines['polar'].set_visible(False)
     # make grid white
@@ -396,7 +408,7 @@ def breathanlyse(df):
     ax2.xaxis.grid(color='white')
     # change the tick labels
     ax2.set_xticks(np.linspace(0, 2*np.pi, 4, endpoint=False), labels=['Start Inhale', '','Start Exhale',''])
-    ax2.set_yticks(np.linspace(40, 80, 5), labels=['40', '50', '60', '70', '80'])
+    ax2.set_yticks(np.linspace(lower_limit, upper_limit, 5), labels=np.linspace(lower_limit, upper_limit, 5, dtype=int))
     # change the location of ytick labels
 
     # save figure
@@ -404,7 +416,7 @@ def breathanlyse(df):
     print(fig_filepath)
     fig.savefig(fig_filepath)
 
-    return resp, cycle_time, cycle_time_std
+    return resp, cycle_time, cycle_time_std, mean_inhalation_time, mean_exhalation_time, inhalation_fraction
 
 
 def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot=True):
@@ -512,7 +524,7 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
         rise_slope, tau, ss, maxHR, HRR60, fig, ax = HRrecovery(df, plot=False)
 
     # check breathing rate during pre period by doing a freq analysis
-    resp, cycle_time, cycle_time_std = breathanlyse(df)
+    resp, cycle_time, cycle_time_std,mean_inhalation_time, mean_exhalation_time, inhalation_fraction = breathanlyse(df)
 
 
     # add the HR recovery parameters to the params dict
@@ -524,6 +536,9 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     params['Breathing Rate'] = np.round(resp,2)
     params['Breathing Cycle Time'] = np.round(cycle_time,2)
     params['Breathing Cycle Fluctuation'] = np.round(cycle_time_std,2)
+    params['Mean Inhalation Time'] = np.round(mean_inhalation_time,2)
+    params['Mean Exhalation Time'] = np.round(mean_exhalation_time,2)
+    params['Inhalation Fraction'] = np.round(inhalation_fraction,2)
 
 
     print('Saving Record...')
@@ -533,7 +548,8 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     for key, value in params.items():
         print(f'{key}: {value}')
 
-
+    plt.show()
+    
     return df, params, [fig, ax]
 
 
@@ -543,4 +559,4 @@ if __name__ == "__main__":
     pre_baseline_period = int(sys.argv[2])
     post_baseline_period = int(sys.argv[3])
     
-    main(filepath, origin='Polar Sensor Logger Export', pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True) 
+    main(filepath, 'Polar Sensor Logger Export', pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True) 
