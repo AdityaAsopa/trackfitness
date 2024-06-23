@@ -17,6 +17,13 @@ from scipy.interpolate import interp1d
 import fitparse
 # import seaborn as sns
 
+from scipy.optimize import curve_fit
+def rising_exponential(t, a, tau, c):
+    return a * (1 - np.exp(-t/tau)) + c
+
+def falling_exponential(t, a, tau, c):
+    return a * np.exp(-t/tau) + c
+
 def fit_to_df(filepath):
     fitfile = fitparse.FitFile(filepath)
     data = []
@@ -101,22 +108,68 @@ def hr_to_sdnn(hr_bpm):
     """
     return rr_to_sdnn(60000/hr_bpm)
 
+def HRR(df, plot=True, fig='', axx=''):
+    # 1. Get Premax HR rise tau
+    # 2. Get Postmax HR fall tau
+    # 3. Get HR recovery at 60s
+
+    # HR Rise analysis
+    peaks, peak_props = find_peaks(df[df['epoch']=='orthostatic']['HR'], width=15, prominence=20)
+    # pick the most prominent peak
+    most_prominent_peak_idx = np.argmax(peak_props['prominences'])
+    peak_start = peak_props['left_bases'][most_prominent_peak_idx]
+    peak_point = peaks[most_prominent_peak_idx]
+    # timestamps for the peak_start and peak_point
+    first_ortho_time=df[df['epoch']=='orthostatic']['Timestamp'].iloc[0]
+    peak_start_time = df[df['epoch']=='orthostatic']['Timestamp'].iloc[peak_start] - first_ortho_time
+    peak_point_time = df[df['epoch']=='orthostatic']['Timestamp'].iloc[peak_point] - first_ortho_time
+
+    risingHR = df[df['epoch']=='orthostatic']['HR'].iloc[peak_start:peak_point]
+    risingHR_time = df[df['epoch']=='orthostatic']['Timestamp'].iloc[peak_start:peak_point] - df[df['epoch']=='orthostatic']['Timestamp'].iloc[peak_start]
+
+    hr1, hr0 = risingHR.iloc[-1] , risingHR.iloc[0]
+    t1, t0   = risingHR_time.iloc[-1] , risingHR_time.iloc[0]
+    rise_slope = (hr1 - hr0) / (t1- t0) # <<
+
+    # HR Fall analysis
+    HR_peak_time = df[df['epoch']=='orthostatic']['Timestamp'].iloc[peak_point]
+    HR_at_peak_point_time = df[df['epoch']=='orthostatic']['HR'].iloc[peak_point]
+    # median HR of the last 20s of the orthostatic period
+    medianHR_at_60s = df[df['epoch']=='orthostatic']['HR'].iloc[-20:].median()
+    HRfall = HR_at_peak_point_time - medianHR_at_60s
+
+    if plot==False:
+        return rise_slope, hr0, hr1, HRfall, None, None
+
+    if not axx:
+        fig, axx = plt.subplots(1, 1, figsize=(12, 6))
+    
+    # ax.plot(dfslice['Timestamp'], dfslice['HR_baseline_corrected']) #--time_max+xmin
+    print(first_ortho_time, peak_start_time, peak_point_time, t0,t1, hr0, hr1, rise_slope, HR_peak_time, HR_at_peak_point_time, medianHR_at_60s, HRfall)
+    axx.plot([t0+peak_start_time+first_ortho_time, t1+peak_start_time+first_ortho_time], [hr0, hr1], '-o', color='orange',  label=f'HR Rise: {rise_slope:.1f} bpm/s')
+    axx.plot([HR_peak_time,HR_peak_time+60], [hr1, medianHR_at_60s], '-o', color='green', label=f'60s HR Recovery: {HRfall:.1f} bpm')
+    
+    return rise_slope, hr0, hr1, HRfall, fig, axx  
+
+
 def HRrecovery(df, fit_window=60, xmin=0, plot=True, fig='', axx=''):
+    # HRR(df)
     # get the time it take to reach the maximum HR: 10-90% of the maximum HR
     # first get the baseline corrected HR
     hrbaseline = df[df['epoch']=='pre']['HR'].median()
-    df['HR_baseline_corrected'] = df['HR'] - hrbaseline
+    hrmin = df[df['epoch']=='pre']['HR'].min()
+    print(f'>> HR baseline: {np.round(hrbaseline,1)}')
+    print(f'>> HR minimum: {np.round(hrmin,1)}')
+    df['HR_baseline_corrected'] = df['HR'] - hrmin
 
     # what is the last 'Timestamp' value when HR was 10% of maxHR before the maximum HR
     maxHR = df[ (df['epoch']=='orthostatic') ][ 'HR_baseline_corrected' ].max()
-    ssHR = df[ (df['epoch']=='post') ][ 'HR_baseline_corrected' ].median()
+    ssHR  = df[ (df['epoch']=='post') ][ 'HR_baseline_corrected' ].median()
     endOrthoHR = df[ (df['epoch']=='orthostatic') ][ 'HR_baseline_corrected' ].values[-1]
     time_max = df[(df['HR_baseline_corrected']==maxHR)]['Timestamp'].values[0]
 
-    # get 'Timestamp' value of all those rows where HR is 10% of maxHR
-    time_10_pre = df[(df['HR_baseline_corrected']<maxHR*0.1) & (df['Timestamp']<time_max)]['Timestamp'].values[-1]
-    time_90_pre = df[(df['HR_baseline_corrected']<maxHR*0.9) & (df['Timestamp']<time_max)]['Timestamp'].values[-1]
-    rise_slope = (maxHR*0.9 - maxHR*0.1) / (time_90_pre - time_10_pre)
+    pre_amplitude = maxHR
+    post_amplitude = maxHR - endOrthoHR
 
     dfslice = df[ df['Timestamp'] > time_max ]
     T = dfslice['Timestamp']-time_max
@@ -127,16 +180,17 @@ def HRrecovery(df, fit_window=60, xmin=0, plot=True, fig='', axx=''):
     time = dfslice2['Timestamp'].values - time_max
     hr = dfslice2['HR_baseline_corrected'].values
 
-    def fixed_exponential(t, a, tau, ss):
-        return a * np.exp(-1 * t/tau) + ss
 
-    print('maxHR:', maxHR, 'endOrthoHR:', endOrthoHR, 'ssHR:', ssHR)
-    popt, _ = curve_fit(fixed_exponential, time, hr, p0=(maxHR, 15, endOrthoHR), bounds=([0.99*(maxHR-endOrthoHR),5,0], [1.2*maxHR, 30, endOrthoHR]))
+
+    print(f">> \n ____maxHR:, {maxHR}, >> \n ____amplitude:, {post_amplitude}, \n ____endOrthoHR:, {endOrthoHR},\n ____ssHR:, {ssHR}")
+    popt, _ = curve_fit(fixed_exponential, time, hr, p0=(post_amplitude, 15, 0), bounds=([0.99*post_amplitude,5,0], [1.2*post_amplitude, 30, 20]))
+    # popt, _ = curve_fit(fixed_exponential, time, hr, p0=(maxHR, 15, endOrthoHR), bounds=([0.99*(maxHR-np.abs(endOrthoHR)),5,-20], [1.2*maxHR, 30, 20]))
     # popt, _ = curve_fit(fixed_exponential, time, hr, p0=(maxHR, 15, endOrthoHR), bounds=([0.9*(maxHR-endOrthoHR),5,0], [1.1*(maxHR+endOrthoHR), 30, endOrthoHR]))
     a, tau, ss = popt
+    print('>> a, tau, ss', a, tau, ss)
     # # plot the fit
     HRR60 = np.round(maxHR - fixed_exponential(60, *popt))
-    print(f'delta HR by the end of 60s: {HRR60}')
+    print(f'>> delta HR by the end of 60s: {HRR60}')
 
     if plot==False:
         return rise_slope, tau, ss, maxHR, HRR60, None, None
@@ -175,10 +229,10 @@ def save_record(record_datetime, params, record_filepath="orthostatic_hrv_record
     dfsave.to_csv(record_filepath, index=False)
     
 
-    print(f'Record saved to {record_filepath}')
+    print(f'## Record saved to {record_filepath}')
     
 
-def plothr(df, pre_baseline_period=60, post_baseline_period=60, plot_window_size=60, end_time=''):
+def plothr(df, pre_baseline_period=60, post_baseline_period=60, plot_window_size=120, end_time=''):
     # make a new plot figure from subplot mosaic
     fig, ax = plt.subplot_mosaic(
                     [["A", "C"],
@@ -233,31 +287,32 @@ def plothr(df, pre_baseline_period=60, post_baseline_period=60, plot_window_size
     maxOHR_index = df[df['HR'] == maxOHR].index[0]
     # find the time of the maxOHR
     maxOHR_time = df['Timestamp'].iloc[maxOHR_index]
-    print(f'Max HR: {maxOHR} at {maxOHR_time} seconds')
+    print(f'>> Max HR: {maxOHR} at {maxOHR_time} seconds')
 
     # plot 'HR' from maxOHR_index-60 to maxOHR_index+60
     ax["C"].plot(df['Timestamp'], df['HR'], linewidth=2, color=[177/256,60/256,108/256], label='HR')    
     ax["C"].set_ylim(40, 120)
-    ax["C"].set_xlim(maxOHR_time-plot_window_size, maxOHR_time+plot_window_size)
+    ax["C"].set_xlim(maxOHR_time-70, maxOHR_time+70)
     # add horizontal line at median of preHR and postHR
-    ax["C"].axhline(y=df[df['epoch']=='pre']['HR'].median(), color='grey', linestyle='--',)
-    ax["C"].axhline(y=df[df['epoch']=='post']['HR'].median(), color='grey', linestyle='--',)
+    ax["C"].axhline(y=df[df['epoch']=='pre']['HR'].median(), color='grey', linestyle='--',label='median preHR')
+    ax["C"].axhline(y=df[df['epoch']=='post']['HR'].median(), color='blue', linestyle='--',label='median postHR')
     ax["C"].set_title('Orthostatic Dynamics of Heart Rate')
     ax["C"].set_xlabel('Time (s)')
     ax["C"].set_ylabel('BPM')
     ax["C"].spines['top'].set_visible(False)
     ax["C"].spines['right'].set_visible(False)
 
-
-    rise_slope, tau, ss, maxHR, HRR60, fig, ax["C"] = HRrecovery(df, xmin=maxOHR_time, fig=fig, axx=ax["C"])
+    print('// Checking HR recovery values')
+    # rise_slope, tau, ss, maxHR, HRR60, fig, ax["C"] = HRrecovery(df, xmin=maxOHR_time, fig=fig, axx=ax["C"])
+    rise_slope, hr0, maxHR, HRR60, fig, ax["C"] = HRR(df, fig=fig, axx=ax["C"])
     ax["C"].legend()
     
-    print(record_datetime)
+    print(f'>> Record Date-time: {record_datetime}')
     fig_filepath = folder / str(f'orthostatic_hrv_test_{record_datetime}.png')
-    print(fig_filepath)
+    print(f'// Figures saved at: \n')
     fig.savefig(fig_filepath)
 
-    return rise_slope, tau, ss, maxHR, HRR60, fig, ax
+    return rise_slope, hr0, maxHR, HRR60, fig, ax
 
 
 def parse_workout_file(filepath, origin='Polar Sensor Logger Export'):
@@ -419,7 +474,7 @@ def breathanlyse(df):
     return resp, cycle_time, cycle_time_std, mean_inhalation_time, mean_exhalation_time, inhalation_fraction
 
 
-def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot=True):
+def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot=True, show_plot=False):
     """
     Main function to calculate baseline HRV and end HRV from a CSV file
     
@@ -429,6 +484,7 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     Returns:
     None
     """
+    plt.close('all')
     df = parse_workout_file(filepath, origin=origin)
     global folder
     folder = Path(filepath).parent
@@ -444,21 +500,27 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     record_datetime = pd.to_datetime(df['Timestamp'].iloc[0]).strftime('%Y-%m-%d-%H-%M-%S')
     df['Timestamp'] = (df['Timestamp'] - df['Timestamp'].iloc[0]).dt.total_seconds()
 
+    # find out the timestamp value for max HR in df['HR'] column
+    maxHR_time = df['Timestamp'][df['HR'].idxmax()]
+    # then pre_baseline_period is from start to maxHR_time - 20 seconds
+    # and post_baseline_period is from maxHR_time + 60 seconds to end
+    global end_time
+    end_time = df['Timestamp'].iloc[-1]   
+    pre_baseline_period = maxHR_time - 30                       # pre time is from start to 30 seconds before maxHR
+    post_baseline_period = end_time - (maxHR_time + 60)         # post time is from 60 seconds after maxHR to end
+    print(f'>> HR Peak at: {maxHR_time}, Pre-Baseline period: {pre_baseline_period}, Post-Baseline Period: {post_baseline_period}')
 
     # first column is timestamp, second column is RR-interval
     # subtract the first timestamp from all the timestamps to get the time in seconds
-    
-    global end_time
-    end_time = df['Timestamp'].iloc[-1]   
-    
     # make a column called 'epoch' which has three values: 'pre', 'orthostatic', 'post'
     df['epoch'] = ''
     df.loc[df['Timestamp'] <= pre_baseline_period, 'epoch'] = 'pre'
     df.loc[(df['Timestamp'] > pre_baseline_period) & (df['Timestamp'] <= end_time-post_baseline_period), 'epoch'] = 'orthostatic'
     df.loc[df['Timestamp'] > end_time-post_baseline_period, 'epoch'] = 'post'
-
+    print(f'>> Size of data and the three epochs: {len(df)}, pre:{len(df[df["epoch"]=="pre"])}, ortho:{len(df[df["epoch"]=="orthostatic"])}, post:{len(df[df["epoch"]=="post"])}')
     RR = df['RR'].values
     HR = df['HR'].values
+
     baseline_hrv = rr_to_rmssd(df[df['epoch']=='pre']['RR'])
     end_hrv =  rr_to_rmssd(df[df['epoch']=='post']['RR'])
 
@@ -475,33 +537,43 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     median_post_HR = np.round(np.median(df[df['epoch']=='post']['HR']), 0)
     max_post_HR = np.round(np.max(df[df['epoch']=='post']['HR']), 0)
 
-
-    flag= ''
+    flag= 'None'
+    msg = ''
+    condition = 'Fit'
     # check if the max of HR overall is higher than pre_max and post_max
     if max_oHR < max_post_HR:
-        print('HR increased after standing up but has not come down. Are you sure you did not move?')
-        print('Flagging the record')
+        msg = '## HR increased after standing up but has not come down. Are you sure you did not move?'
+        print('// Flagging the record')
         flag = 'post High'
     elif max_oHR < max_pre_HR:
-        print('Baseline HR higher than standing HR: Are you sure you stood up? Or were you moving during baseline period?')
-        print('Flagging the record')
+        msg = '## Baseline HR higher than standing HR: Are you sure you stood up? Or were you moving during baseline period?'
+        print('// Flagging the record')
         flag = 'pre High'
         
     # check if pre_HR and post_HR are statistically different by running a kolmogorov smirnoff test
-    preHR = df[df['epoch']=='pre']['HR']
-    postHR = df[df['epoch']=='post']['HR']
+    preHR  = df[df['epoch']=='pre' ]['HR'].to_numpy()
+    postHR = df[df['epoch']=='post']['HR'].to_numpy()
     
+    # assert that the HR values are not empty
+    assert len(preHR) > 0, "No HR values found in pre period"
+    assert len(postHR) > 0, "No HR values found in post period"
+
     # run the KS test
-    ks_stat, ks_pval = ks_2samp(preHR, postHR)
+    ks_stat, ks_pval = ks_2samp(preHR, postHR, alternative='greater')
     # check if the p-value is less than 0.05
-    if ks_pval < 0.05:
-        print('HR during pre and post periods are statistically different. If PostHR is higher, You are cleared for exercise today.')
+    if (ks_pval < 0.001) & ((median_post_HR - median_pre_HR) > 5):
+        print('## HR during pre and post periods are statistically different. If PostHR is higher, You are cleared for exercise today.')
+        condition = 'Fit'
     else:
-        print('HR during pre and post periods are not statistically different. This means that you are not cleared for exercise today. You need to recover.')
+        print('## HR during pre and post periods are not statistically different. This means that you should limit the intensity. You need to recover.')
+        condition = 'Recover'
 
     # save all the params into a dict
     params = {
         'Timestamp': record_datetime,
+        'Pre Epoch': pre_baseline_period,
+        'Post Epoch': post_baseline_period,
+        'max HR time': maxHR_time,
         'Pre HRV (RMSSD)': np.round(baseline_hrv,1),
         'Post HRV (RMSSD)': np.round(end_hrv,1),
         'Pre HRV (SDNN)': np.round(baseline_sdnn,1),
@@ -509,19 +581,24 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
         'max HR': np.round(max_HR,1),
         'Pre max HR': np.round(max_pre_HR,1),
         'Pre median HR': np.round(median_pre_HR,1),
+        'PreHR Std dev': np.round(np.std(preHR),1),
         'Ortho max HR': np.round(max_oHR,1),
         'Post max HR': np.round(max_post_HR,1),
         'Post median HR': np.round(median_post_HR,1),
+        'PostHR Std dev': np.round(np.std(postHR),1),
+        'HRV Pre-Post KS-Stat': np.round(ks_stat,3),
+        'HRV Pre-Post KS-pval': np.round(ks_pval,3),
         'Flag': flag,
-        'HRV Pre-Post KS-Stat': np.round(ks_stat,1),
-        'HRV Pre-Post KS-pval': np.round(ks_pval,2)
+        'Condition': condition
     }
 
+    
     if plot:
-        rise_slope, tau, ss, maxHR, HRR60, fig, ax = plothr(df, pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot_window_size=60,)
+        rise_slope, hr0, maxHR, HRR60, fig, ax = plothr(df, pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot_window_size=60,)
     else:
-        print('No plot requested')
-        rise_slope, tau, ss, maxHR, HRR60, fig, ax = HRrecovery(df, plot=False)
+        print('// No plot requested')
+        rise_slope, hr0, maxHR, HRR60, fig, axx = HRR(df, plot=False)
+        # rise_slope, tau, ss, maxHR, HRR60, fig, ax = HRrecovery(df, plot=False)
 
     # check breathing rate during pre period by doing a freq analysis
     resp, cycle_time, cycle_time_std,mean_inhalation_time, mean_exhalation_time, inhalation_fraction = breathanlyse(df)
@@ -529,8 +606,7 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
 
     # add the HR recovery parameters to the params dict
     params['Ortho HR Rise Slope'] = np.round(rise_slope,2)
-    params['Ortho HR Fall Tau'] = np.round(tau,2)
-    params['Ortho HR Fall HRinf'] = np.round(ss,2)
+    params['Ortho HR Fall HRinf'] = np.round(maxHR-HRR60,2)
     params['maxHR'] = np.round(maxHR,2)
     params['HR Recovery 60s'] = np.round(HRR60,2)
     params['Breathing Rate'] = np.round(resp,2)
@@ -541,22 +617,28 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     params['Inhalation Fraction'] = np.round(inhalation_fraction,2)
 
 
-    print('Saving Record...')
+    print('// Saving Record...')
     save_record(record_datetime, params)
 
     # Print all the params
     for key, value in params.items():
-        print(f'{key}: {value}')
-
-    plt.show()
+        print(f'____{key}: | {value}')
+    
+    if show_plot:
+        plt.show()
+    
+    print('\n \n To log: ', '\n', f'Orthostatic Load: {np.round(max_oHR,1)}', '\n', f'Orthostatic HR: {np.round(median_post_HR,1)}')
+    print('## Flags:', flag)
+    print('## Condition:', condition)
+    print(msg)
     
     return df, params, [fig, ax]
 
 
 if __name__ == "__main__":
-    print('Running Orthostatic HRV Test...')
+    print('// Running Orthostatic HRV Test...')
     filepath = sys.argv[1]
     pre_baseline_period = int(sys.argv[2])
     post_baseline_period = int(sys.argv[3])
     
-    main(filepath, 'Polar Sensor Logger Export', pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True) 
+    main(filepath, 'Polar Sensor Logger Export', pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True, show_plot=True) 
