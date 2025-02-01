@@ -4,3 +4,6 @@
 *.ipynb
 *.pyc
 *.pkl
+*.bat
+*examples*.*
+*test*.*
