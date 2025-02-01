@@ -55,7 +55,8 @@ from pathlib import Path
 import fitparse
 import orthostatic_delta_hrv_test as odht
 
-filepath = Path(r"C:\Users\adity\OneDrive\Gnosis\Codes\trackfitness\98319-88283754.fit") #"C:\Users\adity\OneDrive\Gnosis\Codes\trackfitness\98319-Activity_2024-02-13_09-39_88283754.tcx")
+filepath = Path(r"C:\path\to\workout_fit_file\workout.fit")
+filepath = Path(r"C:\path\to\workout_tcx_file\workout.tcx")
 origins = ['Polar Sensor Logger Export', 'Runalyze Fit Export' , 'Runalyze TCX Export']
 origin = origins[1]
 

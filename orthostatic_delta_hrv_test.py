@@ -5,6 +5,7 @@
 # The baseline HRV is the average HRV value during the first 60 seconds of the test, and the end HRV is the average HRV value during the last 60 seconds of the test.
 
 import sys
+import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -14,10 +15,10 @@ from scipy.stats import kruskal, ks_2samp
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
 from scipy.interpolate import interp1d
-import fitparse
-# import seaborn as sns
-
+# import fitparse
+import seaborn as sns
 from scipy.optimize import curve_fit
+
 def rising_exponential(t, a, tau, c):
     return a * (1 - np.exp(-t/tau)) + c
 
@@ -114,7 +115,13 @@ def HRR(df, plot=True, fig='', axx=''):
     # 3. Get HR recovery at 60s
 
     # HR Rise analysis
-    peaks, peak_props = find_peaks(df[df['epoch']=='orthostatic']['HR'], width=15, prominence=20)
+    orthoepoch = df[df['epoch']=='orthostatic']
+    # starting index of orthoepoch
+    orthoepoch_start = orthoepoch.index[0]
+
+    peaks, peak_props = find_peaks(orthoepoch['HR'].values, width=10)
+    print(f'>> Orthoepoch length: {len(orthoepoch)}, starting index: {orthoepoch_start}')
+    print(f'>> Detected HR Peaks: {peaks}, Prominences: {peak_props["prominences"]} at locations: {peak_props["left_bases"]} and {peak_props["right_bases"]}')
     # pick the most prominent peak
     most_prominent_peak_idx = np.argmax(peak_props['prominences'])
     peak_start = peak_props['left_bases'][most_prominent_peak_idx]
@@ -150,7 +157,6 @@ def HRR(df, plot=True, fig='', axx=''):
     axx.plot([HR_peak_time,HR_peak_time+60], [hr1, medianHR_at_60s], '-o', color='green', label=f'60s HR Recovery: {HRfall:.1f} bpm')
     
     return rise_slope, hr0, hr1, HRfall, fig, axx  
-
 
 def HRrecovery(df, fit_window=60, xmin=0, plot=True, fig='', axx=''):
     # HRR(df)
@@ -204,8 +210,7 @@ def HRrecovery(df, fit_window=60, xmin=0, plot=True, fig='', axx=''):
     
     return rise_slope, tau, ss, a, HRR60, fig, axx
 
-
-def save_record(record_datetime, params, record_filepath="orthostatic_hrv_record.txt" ):
+def save_record(record_datetime, params, record_filepath="orthostatic_hrv_record_2025.txt" ):
     """
     Save the baseline HRV and end HRV to a text file,
     where each row contains, date, time, baseline HRV, and end HRV
@@ -231,7 +236,6 @@ def save_record(record_datetime, params, record_filepath="orthostatic_hrv_record
 
     print(f'## Record saved to {record_filepath}')
     
-
 def plothr(df, pre_baseline_period=60, post_baseline_period=60, plot_window_size=120, end_time=''):
     # make a new plot figure from subplot mosaic
     fig, ax = plt.subplot_mosaic(
@@ -314,17 +318,23 @@ def plothr(df, pre_baseline_period=60, post_baseline_period=60, plot_window_size
 
     return rise_slope, hr0, maxHR, HRR60, fig, ax
 
-
-def parse_workout_file(filepath, origin='Polar Sensor Logger Export'):
+def parse_workout_file(filepath, origin='Polar Sensor Logger Export - HR'):
     ''' 
     origins = ['Polar Sensor Logger Export', 'Runalyze Fit Export' , 'Runalyze TCX Export']
     origin = origins[1]
     '''
-    if origin == 'Polar Sensor Logger Export':
+    if origin == 'Polar Sensor Logger Export - RR':
         df = pd.read_csv(filepath, sep=';', )
         df.rename(columns={'Phone timestamp': 'Timestamp'}, inplace=True)
         df.rename(columns={'RR-interval [ms]': 'RR'}, inplace=True)
         df['HR'] = 60000 / df['RR']
+
+    elif origin == 'Polar Sensor Logger Export - HR':
+            df = pd.read_csv(filepath, sep=';', )
+            df.rename(columns={'Phone timestamp': 'Timestamp'}, inplace=True)
+            df.rename(columns={'HR [bpm]': 'HR'}, inplace=True)
+            df['RR'] = 60000 / df['HR']
+
 
     elif origin == 'Runalyze Fit Export':
         df = fit_to_df(str(filepath))
@@ -341,7 +351,6 @@ def parse_workout_file(filepath, origin='Polar Sensor Logger Export'):
 
     return df
 
-
 def interpolate_cycle(cycle):
     # Create a function that interpolates the cycle
     f = interp1d(np.linspace(0, 1, len(cycle)), cycle, kind='linear')
@@ -349,26 +358,33 @@ def interpolate_cycle(cycle):
     # Use the function to interpolate the cycle to 15 data points
     return f(np.linspace(0, 1, 15))
 
-
-def breathanlyse(df):
-    numsamples = df.shape[0]
-    Fs = numsamples / df['Timestamp'].values[-1]
-
-    # spectral analysis of 'pre' period 'HR'
-    # find outa what frequencies of HR are seen in the data by doing a fourier or spectral anaylsis
-    hr = df[df['epoch']=='pre']['HR'].values
-    t = df[df['epoch']=='pre']['Timestamp'].values
-
-    # one figure, with 2 subplots one cartesian and one polar
-    fig = plt.figure(figsize=(12, 6))
-    ax1 = plt.subplot(121, )
-    # make the ax2 polar projection
-    ax2 = plt.subplot(122, polar=True)
-
-    maxima, _ = find_peaks(hr, prominence=3)
-    minima, _ = find_peaks(-hr, prominence=3)
-    # the time from the peak to trough is inhalation and from trough to peak is exhalation
-    # get an array of both the times
+def breath_check(len_hr, len_maxima, len_minima):
+    print(f'>> breathing data length: {len_hr}, Maxima: {len_maxima}, Minima: {len_minima}')
+    if np.abs(len_maxima - len_minima) > 1:
+        raise ValueError("Number of maxima and minima are not equal")
+    if len_minima < len_hr/15:
+        print('>> Not enough breath cycles detected')
+        raise ValueError('Not enough breath cycles detected')
+    
+def extract_breath_cycles(t,hr):
+    # get maxima, minima
+    try:
+        maxima, _ = find_peaks(hr, prominence=3)
+        minima, _ = find_peaks(-hr, prominence=3)
+        breath_check(len(hr), len(maxima), len(minima))
+    except ValueError as e:
+        print(e)
+        print('trying with different prominence')
+        try:
+            maxima, _ = find_peaks(hr, prominence=2)
+            minima, _ = find_peaks(-hr, prominence=2)
+            breath_check(len(hr), len(maxima), len(minima))
+        
+        except ValueError as e:
+            print(e)
+            print('breathing analysis failed, possibly due to less flucuations in HR during breath cycles. This may be a sign of fatigue or poor recovery')
+            return r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A'
+    num_cycles = np.min([len(maxima),len(minima)])    
     if maxima[0] < minima[0]:
         inhalation_times = [np.round((mint-maxt),2) for maxt, mint in zip(t[maxima], t[minima])]
         exhalation_times = [np.round((maxt-mint),2) for maxt, mint in zip(t[maxima[1:]], t[minima])]
@@ -379,100 +395,107 @@ def breathanlyse(df):
     mean_inhalation_time = np.mean(inhalation_times)
     mean_exhalation_time = np.mean(exhalation_times)
     inhalation_fraction = np.round(mean_inhalation_time/ (mean_inhalation_time + mean_exhalation_time), 2)
-        
 
     resp = 60 / np.mean(np.diff(t[maxima])) # per min
     cycle_time = np.mean(np.diff(t[maxima])) # in seconds
     cycle_time_std = np.std(np.diff(t[maxima])) # in seconds
 
-
     resp_cycles = []
     for i, tt in enumerate(maxima[:-1]):
         hrslice = hr[tt: maxima[i+1]]
         resp_cycles.append(hrslice)
-        
-    for i, cycle in enumerate(resp_cycles):
+
+    breathing_delHR = np.mean(hr[maxima][:num_cycles] - hr[minima][:num_cycles])
+
+    return resp, cycle_time, cycle_time_std, resp_cycles, maxima, minima, breathing_delHR, mean_inhalation_time, mean_exhalation_time, inhalation_fraction
+
+def plot_breath_cycles(cycles, ax=None, polar=False):
+    if polar:
+        # ax.set_projection('polar')
+        ax.set_theta_zero_location("N")
+        ax.spines['polar'].set_visible(False)
+
+    for i, cycle in enumerate(cycles):
         # Create a list of angles based on the number of measurements in the cycle
         angles = np.linspace(0, 2 * np.pi, len(cycle)) 
-        ax1.plot(angles, cycle, color=np.array([72,34,115])/255, linewidth=1, alpha=0.5)
-
+        ax.plot(angles, cycle, color=np.array([72,34,115])/255, linewidth=1, alpha=0.5)
+    
     # also plot an average respiratory cycle - HR response
     # Apply the function to each cycle in your data
-    interpolated_data = np.array([interpolate_cycle(cycle) for cycle in resp_cycles])
+    interpolated_data = np.array([interpolate_cycle(cycle) for cycle in cycles])
     # Calculate the average heart rate for each interpolated angle
     avg_hr = np.mean(interpolated_data, axis=0)
     angles = np.linspace(0, 2 * np.pi, 15) 
-    ax1.plot(angles, avg_hr, color='k', linewidth=3)
-    # Show the plots
+    ax.plot(angles, avg_hr, color='k', linewidth=3)
+
     lower_limit, upper_limit = 40,80 # 60, 120
-    ax1.set_ylim([lower_limit, upper_limit])
-    # Shade the inhalation phase
-    [start_inhalation, end_inhalation] = 0, np.pi
-    [start_exhalation, end_exhalation] = np.pi, 2*np.pi
+    ax.set_ylim([lower_limit, upper_limit])
 
     # # Replace start_inhalation and end_inhalation with the start and end angles of the inhalation phase
-    ax1.fill_between(np.linspace(0,np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([37,134,142])/255, alpha=0.5)
+    ax.fill_between(np.linspace(0,np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([37,134,142])/255, alpha=0.5)
     # # Shade the exhalation phase
-    ax1.fill_between(np.linspace(np.pi,2*np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([164,49,127])/255, alpha=0.5)
-
+    ax.fill_between(np.linspace(np.pi,2*np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([164,49,127])/255, alpha=0.5)
 
     # make grid white
-    ax1.yaxis.grid(color='white')
-    ax1.xaxis.grid(color='white')
+    ax.yaxis.grid(color='white')
+    ax.xaxis.grid(color='white')
     # change the tick labels
-    ax1.set_xticks(np.linspace(0, 2*np.pi, 4, endpoint=False), labels=['Start Inhale', '','Start Exhale',''])
-    ax1.set_yticks(np.linspace(lower_limit, upper_limit, 5), labels=np.linspace(lower_limit, upper_limit, 5, dtype=int))
-    ax1.set_xlim([0, 2*np.pi])
+    ax.set_xticks(np.linspace(0, 2*np.pi, 4, endpoint=False), labels=['Start Inhale', '','Start Exhale',''])
+    ax.set_yticks(np.linspace(lower_limit, upper_limit, 5), labels=np.linspace(lower_limit, upper_limit, 5, dtype=int))
+    ax.set_xlim([0, 2*np.pi])
     # remove spines
-    ax1.spines['top'].set_visible(False)
-    ax1.spines['right'].set_visible(False)
+    if not polar:
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
 
+def breathanlyse(df):
+    # one figure, with 2 subplots one cartesian and one polar
+    fig = plt.figure(figsize=(12, 6))
+    ax1 = plt.subplot(321, )
+    ax2 = plt.subplot(322, polar=True)
+    ax3 = plt.subplot(323,)
+    ax4 = plt.subplot(324,)
+    ax5 = plt.subplot(325)
+    ax6 = plt.subplot(326, polar=True)
 
+    hr = df[df['epoch']=='pre']['HR'].values
+    t = df[df['epoch']=='pre']['Timestamp'].values
+    print(f'>> HR data length: {len(hr)}')
 
-    # make ax2 polar
-    # ax2.set_projection('polar')
-    ax2.set_theta_zero_location("N")
-    # Assuming `data` is your list of vectors, where each vector is heart rate during one breathing cycle
+    # high pass filtering the hr to remove slow fluctuations
+    w = 8
+    base = np.convolve(hr, np.ones(2*w), 'same') / 2*w
+    hr_filt = (hr-base)[w:-w]
+    t_filt = t[w:-w]
 
-    for i, cycle in enumerate(resp_cycles):
-        # Create a list of angles based on the number of measurements in the cycle
-        angles = np.linspace(0, 2 * np.pi, len(cycle)) 
-        ax2.plot(angles, cycle, color=np.array([72,34,115])/255, linewidth=1, alpha=0.5)
+    breath      = resp, cycle_time, cycle_time_std, resp_cycles, maxima, minima, breathing_delHR, mean_inhalation_time, mean_exhalation_time, inhalation_fraction = extract_breath_cycles(t,hr)
+    if breath[0] != '#N/A':
+        plot_breath_cycles(resp_cycles, ax=ax1, )
+        plot_breath_cycles(resp_cycles, ax=ax2, polar=True)
+        
+        # show detected breath
+        ax3.plot(t, hr)
+        ax3.plot(t[maxima], hr[maxima], 'go')
+        ax3.plot(t[minima], hr[minima], 'ro')
+        ax3.plot(t, base, 'grey', '--')
 
-    # also plot an average respiratory cycle - HR response
-    # Apply the function to each cycle in your data
-    interpolated_data = np.array([interpolate_cycle(cycle) for cycle in resp_cycles])
-    # Calculate the average heart rate for each interpolated angle
-    avg_hr = np.mean(interpolated_data, axis=0)
-    angles = np.linspace(0, 2 * np.pi, 15) 
-    ax2.plot(angles, avg_hr, color='k', linewidth=3)
-    # Show the plots
-    ax2.set_ylim([lower_limit, upper_limit])
-    # Shade the inhalation phase
-    [start_inhalation, end_inhalation] = 0, np.pi
-    [start_exhalation, end_exhalation] = np.pi, 2*np.pi
+    breath_filt = resp, cycle_time, cycle_time_std, resp_cycles, maxima, minima, breathing_delHR, mean_inhalation_time, mean_exhalation_time, inhalation_fraction = extract_breath_cycles(t_filt,hr_filt)
+    if breath_filt[0] != '#N/A':
+        plot_breath_cycles(resp_cycles, ax=ax5, )
+        plot_breath_cycles(resp_cycles, ax=ax6, polar=True)
 
-    # # Replace start_inhalation and end_inhalation with the start and end angles of the inhalation phase
-    ax2.fill_between(np.linspace(0,np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([37,134,142])/255, alpha=0.5)
-    # # Shade the exhalation phase
-    ax2.fill_between(np.linspace(np.pi,2*np.pi,180), np.linspace(lower_limit,lower_limit,180), np.linspace(upper_limit,upper_limit,180), color=np.array([164,49,127])/255, alpha=0.5)
-    # remove outer circle
-    ax2.spines['polar'].set_visible(False)
-    # make grid white
-    ax2.yaxis.grid(color='white')
-    ax2.xaxis.grid(color='white')
-    # change the tick labels
-    ax2.set_xticks(np.linspace(0, 2*np.pi, 4, endpoint=False), labels=['Start Inhale', '','Start Exhale',''])
-    ax2.set_yticks(np.linspace(lower_limit, upper_limit, 5), labels=np.linspace(lower_limit, upper_limit, 5, dtype=int))
-    # change the location of ytick labels
+        # plot a moving average of hr
+        ax4.plot(t_filt, hr_filt)
+        ax4.plot(t_filt[maxima], hr_filt[maxima], 'go')
+        ax4.plot(t_filt[minima], hr_filt[minima], 'ro')
 
     # save figure
-    fig_filepath = folder / str(f'HR_response_to_breathing_{record_datetime}.png')
-    print(fig_filepath)
-    fig.savefig(fig_filepath)
+    if breath[0] != '#N/A':
+        fig_filepath = folder / str(f'HR_response_to_breathing_{record_datetime}.png')
+        print(fig_filepath)
+        fig.savefig(fig_filepath)
 
-    return resp, cycle_time, cycle_time_std, mean_inhalation_time, mean_exhalation_time, inhalation_fraction
-
+    return breath, breath_filt
 
 def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot=True, show_plot=False):
     """
@@ -497,7 +520,8 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     # save record_datetime as a global variable
     global record_datetime
     df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-    record_datetime = pd.to_datetime(df['Timestamp'].iloc[0]).strftime('%Y-%m-%d-%H-%M-%S')
+    record_datetime = pd.to_datetime(df['Timestamp'].iloc[0]).strftime('%Y-%m-%d %H-%M-%S')
+    record_date = pd.to_datetime(df['Timestamp'].iloc[0]).strftime('%Y-%m-%d')
     df['Timestamp'] = (df['Timestamp'] - df['Timestamp'].iloc[0]).dt.total_seconds()
 
     # find out the timestamp value for max HR in df['HR'] column
@@ -520,6 +544,15 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     print(f'>> Size of data and the three epochs: {len(df)}, pre:{len(df[df["epoch"]=="pre"])}, ortho:{len(df[df["epoch"]=="orthostatic"])}, post:{len(df[df["epoch"]=="post"])}')
     RR = df['RR'].values
     HR = df['HR'].values
+
+    # plot HR
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    sns.lineplot(data=df, x='Timestamp', y='HR', hue='epoch', ax=ax)
+    # save fig
+    fig_filepath = folder / str(f'Raw_HR_response_{record_datetime}.png')
+    fig.savefig(fig_filepath)
+    # show this plot always
+    fig.show()
 
     baseline_hrv = rr_to_rmssd(df[df['epoch']=='pre']['RR'])
     end_hrv =  rr_to_rmssd(df[df['epoch']=='post']['RR'])
@@ -571,6 +604,7 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     # save all the params into a dict
     params = {
         'Timestamp': record_datetime,
+        'Date': record_date,
         'Pre Epoch': pre_baseline_period,
         'Post Epoch': post_baseline_period,
         'max HR time': maxHR_time,
@@ -600,22 +634,24 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
         rise_slope, hr0, maxHR, HRR60, fig, axx = HRR(df, plot=False)
         # rise_slope, tau, ss, maxHR, HRR60, fig, ax = HRrecovery(df, plot=False)
 
-    # check breathing rate during pre period by doing a freq analysis
-    resp, cycle_time, cycle_time_std,mean_inhalation_time, mean_exhalation_time, inhalation_fraction = breathanlyse(df)
-
-
+    # check breathing rate during pre period by doing a freq analysis        
+    breath, _ = breathanlyse(df)
+    resp, cycle_time, cycle_time_std, _,_,_, breathing_delHR, mean_inhalation_time, mean_exhalation_time, inhalation_fraction = breath 
     # add the HR recovery parameters to the params dict
     params['Ortho HR Rise Slope'] = np.round(rise_slope,2)
     params['Ortho HR Fall HRinf'] = np.round(maxHR-HRR60,2)
     params['maxHR'] = np.round(maxHR,2)
     params['HR Recovery 60s'] = np.round(HRR60,2)
-    params['Breathing Rate'] = np.round(resp,2)
-    params['Breathing Cycle Time'] = np.round(cycle_time,2)
-    params['Breathing Cycle Fluctuation'] = np.round(cycle_time_std,2)
-    params['Mean Inhalation Time'] = np.round(mean_inhalation_time,2)
-    params['Mean Exhalation Time'] = np.round(mean_exhalation_time,2)
-    params['Inhalation Fraction'] = np.round(inhalation_fraction,2)
+    params['Breathing Rate'] = np.round(resp,2) if breath[0] !="#N/A" else breath[0]
+    params['Breathing Cycle Time'] = np.round(cycle_time,2) if breath[0] !="#N/A" else breath[0]
+    params['Breathing Cycle Fluctuation'] = np.round(cycle_time_std,2) if breath[0] !="#N/A" else breath[0]
+    params['Breathing HR Fluctuation'] = np.round(breathing_delHR,2) if breath[0] !="#N/A" else breath[0]
+    params['Mean Inhalation Time'] = np.round(mean_inhalation_time,2) if breath[0] !="#N/A" else breath[0]
+    params['Mean Exhalation Time'] = np.round(mean_exhalation_time,2) if breath[0] !="#N/A" else breath[0]
+    params['Inhalation Fraction'] = np.round(inhalation_fraction,2) if breath[0] !="#N/A" else breath[0]
 
+    params['Prebaseline period'] = pre_baseline_period
+    params['Postbaseline period'] = post_baseline_period
 
     print('// Saving Record...')
     save_record(record_datetime, params)
@@ -632,7 +668,7 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
     print('## Condition:', condition)
     print(msg)
     
-    return df, params, [fig, ax]
+    return df, params, breath, [fig, ax]
 
 
 if __name__ == "__main__":
@@ -640,5 +676,11 @@ if __name__ == "__main__":
     filepath = sys.argv[1]
     pre_baseline_period = int(sys.argv[2])
     post_baseline_period = int(sys.argv[3])
+    if sys.argv[4]:
+        RRorHR = sys.argv[4]
+    else:
+        RRorHR = 'HR'
     
-    main(filepath, 'Polar Sensor Logger Export', pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True, show_plot=True) 
+    dataformat = 'Polar Sensor Logger Export - ' + RRorHR
+    
+    main(filepath, 'Polar Sensor Logger Export - HR', pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True, show_plot=True) 
