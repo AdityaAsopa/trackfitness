@@ -13,16 +13,19 @@ login_url = 'https://runalyze.com/login'
 data_url =  'https://runalyze.com/dashboard'
 
 # Load login credentials from .json
-with open('runalyze_login.json') as f:
+with open('env.json') as f:
     config = json.load(f)
 
 USERID = config['RUNALYZE_USER']
 PSWD = config['RUNALYZE_PASSWORD']
 record_file_path = config['runalyze_record_file_path']
 
+# wait for user input
+input("Press Enter to continue...")
+
 ### -------------------------------------------------- ###
 # Specify the path to the ChromeDriver executable
-service = Service("C:\drivers\chromedriver.exe")
+service = Service(r"C:\drivers\chromedriver-win64\chromedriver.exe")
 
 # Initialize the WebDriver with the Service object
 driver = webdriver.Chrome(service=service)

@@ -119,7 +119,7 @@ def HRR(df, plot=True, fig='', axx=''):
     # starting index of orthoepoch
     orthoepoch_start = orthoepoch.index[0]
 
-    peaks, peak_props = find_peaks(orthoepoch['HR'].values, width=10)
+    peaks, peak_props = find_peaks(orthoepoch['HR'].values, width=5)
     print(f'>> Orthoepoch length: {len(orthoepoch)}, starting index: {orthoepoch_start}')
     print(f'>> Detected HR Peaks: {peaks}, Prominences: {peak_props["prominences"]} at locations: {peak_props["left_bases"]} and {peak_props["right_bases"]}')
     # pick the most prominent peak
@@ -362,28 +362,21 @@ def breath_check(len_hr, len_maxima, len_minima):
     print(f'>> breathing data length: {len_hr}, Maxima: {len_maxima}, Minima: {len_minima}')
     if np.abs(len_maxima - len_minima) > 1:
         raise ValueError("Number of maxima and minima are not equal")
-    if len_minima < len_hr/15:
+    if len_minima < len_hr/20:
         print('>> Not enough breath cycles detected')
         raise ValueError('Not enough breath cycles detected')
+    print(">> Breathing related HR fluctutations detected")
     
-def extract_breath_cycles(t,hr):
+def extract_breath_cycles(t,hr, min_fluctuation=2):
     # get maxima, minima
     try:
-        maxima, _ = find_peaks(hr, prominence=3)
-        minima, _ = find_peaks(-hr, prominence=3)
+        maxima, _ = find_peaks(hr, prominence=min_fluctuation)
+        minima, _ = find_peaks(-hr, prominence=min_fluctuation)
         breath_check(len(hr), len(maxima), len(minima))
     except ValueError as e:
         print(e)
-        print('trying with different prominence')
-        try:
-            maxima, _ = find_peaks(hr, prominence=2)
-            minima, _ = find_peaks(-hr, prominence=2)
-            breath_check(len(hr), len(maxima), len(minima))
-        
-        except ValueError as e:
-            print(e)
-            print('breathing analysis failed, possibly due to less flucuations in HR during breath cycles. This may be a sign of fatigue or poor recovery')
-            return r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A'
+        print('breathing analysis failed, possibly due to less flucuations in HR during breath cycles. This may be a sign of fatigue, poor recovery, or shallow breathing.')
+        return r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A',r'#N/A'
     num_cycles = np.min([len(maxima),len(minima)])    
     if maxima[0] < minima[0]:
         inhalation_times = [np.round((mint-maxt),2) for maxt, mint in zip(t[maxima], t[minima])]
@@ -440,9 +433,9 @@ def plot_breath_cycles(cycles, ax=None, polar=False):
     ax.yaxis.grid(color='white')
     ax.xaxis.grid(color='white')
     # change the tick labels
-    ax.set_xticks(np.linspace(0, 2*np.pi, 4, endpoint=False), labels=['Start Inhale', '','Start Exhale',''])
-    ax.set_yticks(np.linspace(lower_limit, upper_limit, 5), labels=np.linspace(lower_limit, upper_limit, 5, dtype=int))
-    ax.set_xlim([0, 2*np.pi])
+    # ax.set_xticks(np.linspace(0, 2*np.pi, 4, endpoint=False), labels=['Start Inhale', '','Start Exhale',''])
+    # ax.set_yticks(np.linspace(lower_limit, upper_limit, 5), labels=np.linspace(lower_limit, upper_limit, 5, dtype=int))
+    # ax.set_xlim([0, 2*np.pi])
     # remove spines
     if not polar:
         ax.spines['top'].set_visible(False)
@@ -469,7 +462,10 @@ def breathanlyse(df):
     t_filt = t[w:-w]
 
     breath      = resp, cycle_time, cycle_time_std, resp_cycles, maxima, minima, breathing_delHR, mean_inhalation_time, mean_exhalation_time, inhalation_fraction = extract_breath_cycles(t,hr)
-    if breath[0] != '#N/A':
+    if breath[0] == '#N/A':
+        breath_flag = 'Shallow'
+    else:
+        breath_flag = 'Normal'
         plot_breath_cycles(resp_cycles, ax=ax1, )
         plot_breath_cycles(resp_cycles, ax=ax2, polar=True)
         
@@ -477,7 +473,7 @@ def breathanlyse(df):
         ax3.plot(t, hr)
         ax3.plot(t[maxima], hr[maxima], 'go')
         ax3.plot(t[minima], hr[minima], 'ro')
-        ax3.plot(t, base, 'grey', '--')
+        # ax3.plot(t, base, 'grey', '--')
 
     breath_filt = resp, cycle_time, cycle_time_std, resp_cycles, maxima, minima, breathing_delHR, mean_inhalation_time, mean_exhalation_time, inhalation_fraction = extract_breath_cycles(t_filt,hr_filt)
     if breath_filt[0] != '#N/A':
@@ -491,11 +487,12 @@ def breathanlyse(df):
 
     # save figure
     if breath[0] != '#N/A':
+        print("saving respiration figure")
         fig_filepath = folder / str(f'HR_response_to_breathing_{record_datetime}.png')
         print(fig_filepath)
         fig.savefig(fig_filepath)
 
-    return breath, breath_filt
+    return breath, breath_filt, breath_flag
 
 def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot=True, show_plot=False):
     """
@@ -635,14 +632,15 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
         # rise_slope, tau, ss, maxHR, HRR60, fig, ax = HRrecovery(df, plot=False)
 
     # check breathing rate during pre period by doing a freq analysis        
-    breath, _ = breathanlyse(df)
+    breath, _, breath_flag = breathanlyse(df)
     resp, cycle_time, cycle_time_std, _,_,_, breathing_delHR, mean_inhalation_time, mean_exhalation_time, inhalation_fraction = breath 
     # add the HR recovery parameters to the params dict
     params['Ortho HR Rise Slope'] = np.round(rise_slope,2)
     params['Ortho HR Fall HRinf'] = np.round(maxHR-HRR60,2)
     params['maxHR'] = np.round(maxHR,2)
     params['HR Recovery 60s'] = np.round(HRR60,2)
-    params['Breathing Rate'] = np.round(resp,2) if breath[0] !="#N/A" else breath[0]
+    print(breath[0], breath[0] != "#N/A")
+    params['Breathing Rate'] = np.round(resp,2) if breath[0] != "#N/A" else breath[0]
     params['Breathing Cycle Time'] = np.round(cycle_time,2) if breath[0] !="#N/A" else breath[0]
     params['Breathing Cycle Fluctuation'] = np.round(cycle_time_std,2) if breath[0] !="#N/A" else breath[0]
     params['Breathing HR Fluctuation'] = np.round(breathing_delHR,2) if breath[0] !="#N/A" else breath[0]
@@ -652,6 +650,8 @@ def main(filepath, origin, pre_baseline_period=60, post_baseline_period=60, plot
 
     params['Prebaseline period'] = pre_baseline_period
     params['Postbaseline period'] = post_baseline_period
+
+    params['Flag'] = flag
 
     print('// Saving Record...')
     save_record(record_datetime, params)
@@ -683,4 +683,4 @@ if __name__ == "__main__":
     
     dataformat = 'Polar Sensor Logger Export - ' + RRorHR
     
-    main(filepath, 'Polar Sensor Logger Export - HR', pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True, show_plot=True) 
+    main(filepath, dataformat, pre_baseline_period=pre_baseline_period, post_baseline_period=post_baseline_period, plot=True, show_plot=True) 

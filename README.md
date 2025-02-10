@@ -71,11 +71,24 @@ df, params, [fig, ax] = odht.main(filepath, origin, pre_baseline_period=pre_base
 The results are displayed in the form of a plot. The plot shows the HRV and Orthostatic Load over the period of time. The HRV is measured in milliseconds and the Orthostatic Load is measured in beats per minute.
 
 ### Orthostatic HRV Test
-![Orthostatic HRV Test](orthostatic_hrv_test_2024-02-13-04-09-55.png)
 
 ### Orthostatic Load and other parameters
-![Results](df_params.png)
 
 ### Breathing Quality
 
-![Breathing Quality](HR_response_to_breathing_2024-02-20-09-17-11.png)
+
+---
+# Principles of 12 factors
+[https://12factor.net/]()
+1. Codebase:            One codebase tracked in revision control, many deploys
+2. Dependencies:        Explicitly declare and isolate dependencies
+3. Config:              Store config in the environment
+4. Backing services:    Treat backing services as attached resources
+5. Build, release, run: Strictly separate build and run stages
+6. Processes:           Execute the app as one or more stateless processes
+7. Port binding:        Export services via port binding
+8. Concurrency:         Scale out via the process model
+9. Disposability:       Maximize robustness with fast startup and graceful shutdown
+10. Dev/prod parity:    Keep development, staging, and production as similar as possible
+11. Logs:               Treat logs as event streams
+12. Admin processes:    Run admin/management tasks as one-off processes
