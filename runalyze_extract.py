@@ -20,9 +20,6 @@ USERID = config['RUNALYZE_USER']
 PSWD = config['RUNALYZE_PASSWORD']
 record_file_path = config['runalyze_record_file_path']
 
-# wait for user input
-input("Press Enter to continue...")
-
 ### -------------------------------------------------- ###
 # Specify the path to the ChromeDriver executable
 service = Service(r"C:\drivers\chromedriver-win64\chromedriver.exe")

@@ -129,6 +129,8 @@ class BodyCompositionExtractor:
             existing_data = pd.DataFrame()
 
         updated_data = pd.concat([existing_data, new_data], ignore_index=True)
+        # drop duplicates
+        updated_data = updated_data.drop_duplicates(subset=['date', 'time'], keep='last')
         updated_data.to_csv(record_path, index=False)
 
 
@@ -149,12 +151,7 @@ def load_config(config_file: Union[str, Path] = 'env.json') -> dict:
         raise RuntimeError(f"Error loading configuration from {config_file}: {e}")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python script.py <image_filepath>")
-        sys.exit(1)
-
-    image_path = sys.argv[1]
+def main(image_path):
     config = load_config()  # Loads env.json from the current directory
     record_csv_path = config.get('bodycomp_record_folder_path', 'bodycomp_record.csv')
 
@@ -172,4 +169,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) < 2:
+        print("Usage: python script.py <image_filepath>")
+        sys.exit(1)
+    image_path = sys.argv[1]
+    main(image_path)

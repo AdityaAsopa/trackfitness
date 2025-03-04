@@ -7,6 +7,7 @@ import seaborn as sns
 from scipy.stats import kruskal, ks_2samp
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
+from scipy.signal import medfilt
 from scipy.interpolate import interp1d
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional
@@ -41,6 +42,12 @@ class OrthostaticAnalyzer:
         self.record_datetime = pd.to_datetime(self.df['Timestamp'].iloc[0]).strftime('%Y-%m-%d %H-%M-%S')
         self.record_date = pd.to_datetime(self.df['Timestamp'].iloc[0]).strftime('%Y-%m-%d')
         self._preprocess_data()
+        try:
+            self.analyse()
+        except Exception as e:
+            print(e)
+
+    def analyse(self):
         self.analyze_breathing()
         # self.breath_metrics_raw = breathing_raw
         # self.breath_metrics_baseline_corrected = breahting_baseline_corrected
@@ -95,8 +102,14 @@ class OrthostaticAnalyzer:
     def _preprocess_data(self):
         """Prepare data for analysis by calculating epochs and normalizing time"""
         self.df['Timestamp'] = (self.df['Timestamp'] - self.df['Timestamp'].iloc[0]).dt.total_seconds()
-        max_hr_time = self.df['Timestamp'][self.df['HR'].idxmax()]
+
+        # median filter to remove noise and sharp spikes
+        self.df['HR'] = medfilt(self.df['HR'], kernel_size=5)
+
+        max_hr_time = self.df['Timestamp'][self.df.iloc[180:240]['HR'].idxmax()]
         end_time = self.df['Timestamp'].iloc[-1]
+
+        print(f'Max HR: {self.df.iloc[180:240]["HR"].max()} at {max_hr_time} seconds')
         
         self.pre_baseline = max_hr_time - 30
         self.post_baseline = end_time - (max_hr_time + 70)
@@ -144,7 +157,7 @@ class OrthostaticAnalyzer:
         num_cycles = min(len(maxima_indices), len(minima_indices))
         cycle_times = np.diff(t[maxima_indices])
 
-        if num_cycles < expected_breath_cycles:
+        if num_cycles < np.floor(expected_breath_cycles):
             logging.warning(f"Breathing patterns not detected, expected: {expected_breath_cycles}, found: {len(maxima_indices)}")
             breathing_metrics= BreathingMetrics(
                                                 num_cycles,
@@ -330,7 +343,7 @@ class OrthostaticAnalyzer:
         2. HR value 60 seconds after peak in orthostatic epoch
         """
         # pre period analysis
-        per_epoch_median_hr = self.df[self.df['epoch']=='pre']['HR'].median()
+        pre_epoch_median_hr = self.df[self.df['epoch']=='pre']['HR'].median()
         pre_epoch_hr_std    = self.df[self.df['epoch']=='pre']['HR'].std()
 
         # Get orthostatic epoch data
@@ -338,11 +351,25 @@ class OrthostaticAnalyzer:
         ortho_epoch_start_timepoint = ortho_data['Timestamp'].iloc[0]
         
         # Find most prominent peak
-        max_hr = ortho_data['HR'].max()
-        peaks, peak_props = find_peaks(ortho_data['HR'].values, height=max_hr-5, width=5)
-        peak_idx = np.argmax(peak_props['prominences']) # out of all detected peaks, index of the most prominent one
+        peaks, peak_props = find_peaks(ortho_data['HR'].values, height=pre_epoch_median_hr,prominence=15, width=10)
+        max_hr = peak_props['peak_heights'].max()
+        if len(peaks) == 0:
+            raise ValueError("No peaks detected in orthostatic epoch")
+        peak_idx = np.argmax(peak_props['peak_heights']) # out of all detected peaks, index of the most prominent one
         peak_start = peak_props['left_bases'][peak_idx]
         peak_point = peaks[peak_idx]
+
+        print('Saving raw data to inspect')
+        fig,ax = plt.subplots(figsize=(20,10))
+        x = self.df['HR'].values
+        peaks, properties = find_peaks(x, height=pre_epoch_median_hr,prominence=15, width=10)
+        print(peaks, properties)
+        ax.plot(x)
+        ax.plot(peaks, x[peaks], "x")
+        ax.vlines(x=peaks, ymin=x[peaks] - properties["prominences"],ymax = x[peaks], color = "C1")
+        ax.hlines(y=properties["width_heights"], xmin=properties["left_ips"],xmax=properties["right_ips"], color = "C1")
+        fig.savefig(self.folder / f'orthostatic_analysis_raw_data_{self.record_datetime}.png')
+        
         
         # Calculate rise metrics
         ortho_epoch_hrrise_start_timepoint = ortho_data['Timestamp'].iloc[peak_start] 
@@ -361,11 +388,11 @@ class OrthostaticAnalyzer:
         post_epoch_hr_std    = self.df[self.df['epoch']=='post']['HR'].std()
 
         #post - pre comparison
-        pre_to_post_hr_load = post_epoch_median_hr - per_epoch_median_hr
+        pre_to_post_hr_load = post_epoch_median_hr - pre_epoch_median_hr
 
         # Return metrics
         return {
-                "pre_epoch_median_hr": per_epoch_median_hr,
+                "pre_epoch_median_hr": pre_epoch_median_hr,
                 "pre_epoch_hr_std": pre_epoch_hr_std,
                 "ortho_epoch_start_timepoint": ortho_epoch_start_timepoint,
                 "ortho_epoch_hrrise_start_timepoint": ortho_epoch_hrrise_start_timepoint,
@@ -374,7 +401,7 @@ class OrthostaticAnalyzer:
                 "ortho_hr_peak": max_hr,
                 "hr_rise": hr_rise,
                 "rise_slope": rise_slope,
-                "orthostatic_load": max_hr - per_epoch_median_hr,
+                "orthostatic_load": max_hr - pre_epoch_median_hr,
                 "HRR60": HRR60,
                 "post_epoch_median_hr": post_epoch_median_hr,
                 "post_epoch_hr_std": post_epoch_hr_std,
