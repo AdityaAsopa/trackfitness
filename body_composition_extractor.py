@@ -129,8 +129,12 @@ class BodyCompositionExtractor:
             existing_data = pd.DataFrame()
 
         updated_data = pd.concat([existing_data, new_data], ignore_index=True)
+        # date column as datetime
+        updated_data['date'] = pd.to_datetime(updated_data['date'], format='%Y-%m-%d')
         # drop duplicates
         updated_data = updated_data.drop_duplicates(subset=['date', 'time'], keep='last')
+        # sort by date
+        updated_data = updated_data.sort_values('date')
         updated_data.to_csv(record_path, index=False)
 
 
